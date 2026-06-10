@@ -17,9 +17,12 @@
  *
  * const auth = createContractProxy<AuthServiceProxy>(client, AuthServiceConfig);
  *
- * const user = await auth.authenticate('my-jwt-token');
- * console.log(user.id);    // "alice"
- * console.log(user.roles); // ["customer"]
+ * const token = await auth.authenticate('my-jwt-token');
+ * console.log(token.subject); // user identifier
+ * console.log(token.expiresAt); // expiry timestamp
+ *
+ * // Refresh the token before it expires
+ * const refreshed = await auth.refresh('my-jwt-token');
  *
  * auth.logout();
  * ```
@@ -30,17 +33,27 @@ import type { ProxyOptions } from './types';
 // ─── Response type ────────────────────────────────────────────
 
 /**
- * User value object returned by `authenticate()`.
+ * Token value object returned by `authenticate()` and `refresh()`.
  *
- * Matches `PhpWebsocketRpc\Rpc\Auth\User` on the PHP side.
+ * Matches `PhpWebsocketRpc\Rpc\Auth\Token` on the PHP side.
  * The server sends it as `[FQCN, props]` on the wire, which the
  * client already decodes into a plain object with this shape.
  */
-export interface AuthUser {
-    /** Unique user identifier (user ID, email, UUID, etc.) */
+export interface AuthToken {
+    /** Unique token identifier */
     id: string;
-    /** Roles assigned to this user (e.g. `["admin"]`, `["customer"]`) */
-    roles: string[];
+    /** Token issuer */
+    issuer: string;
+    /** Subject identifier (user ID, email, etc.) */
+    subject: string;
+    /** Intended audience */
+    audience: string;
+    /** Expiry Unix timestamp */
+    expiresAt: number;
+    /** Not-before Unix timestamp */
+    notBefore: number;
+    /** Issued-at Unix timestamp */
+    issuedAt: number;
 }
 
 // ─── Proxy interface ──────────────────────────────────────────
@@ -49,21 +62,30 @@ export interface AuthUser {
  * Proxy interface for the built-in AuthService contract.
  *
  * Methods:
- * - `authenticate(token)` — login with a token, returns user data
+ * - `authenticate(token)` — login with a token, returns a Token
+ * - `refresh(token)` — refresh an expiring token, returns a new Token
  * - `logout()` — clear the auth state for the current connection
  */
 export interface AuthServiceProxy {
     /**
-     * Authenticate with a token and return the user data.
+     * Authenticate with a token and return token data.
      *
      * On success the server stores the user in the client's session,
      * making protected methods (those marked with `#[NeedAuthorization]`)
      * accessible.
      *
      * @param token The authentication token (JWT, session ID, etc.)
-     * @returns The authenticated user's identity and roles
+     * @returns The token metadata (id, subject, expiry, etc.)
      */
-    authenticate(token: string): Promise<AuthUser>;
+    authenticate(token: string): Promise<AuthToken>;
+
+    /**
+     * Refresh an expiring authentication token.
+     *
+     * @param token The current authentication token
+     * @returns A new Token with updated expiry
+     */
+    refresh(token: string): Promise<AuthToken>;
 
     /**
      * Clear the authentication state for the current connection.
@@ -87,6 +109,6 @@ export interface AuthServiceProxy {
 export const AuthServiceConfig = {
     /** Matches the PHP FQCN: `PhpWebsocketRpc\Rpc\Contract\AuthService` */
     service: 'PhpWebsocketRpc\\Rpc\\Contract\\AuthService',
-    call: ['authenticate'],
+    call: ['authenticate', 'refresh'],
     notify: ['logout'],
 } satisfies ProxyOptions;
